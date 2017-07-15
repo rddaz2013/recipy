@@ -1,10 +1,8 @@
-import sys
 from .PatchImporter import PatchImporter
-import wrapt
 
-from .log import *
-from recipyCommon.utils import *
+from recipyCommon.utils import patch_function
 from recipyCommon.config import option_set
+
 
 class PatchSimple(PatchImporter):
     """Simple sublass of PatchImporter which implements
@@ -19,7 +17,7 @@ class PatchSimple(PatchImporter):
         """Do the patching of `input_functions` and `output_functions`
         in `mod` using `input_wrapper` and `output_wrapper` respectively.
         """
-        
+
         if not self._ignore_input():
             for f in self.input_functions:
                 if option_set('general', 'debug'):
@@ -48,4 +46,5 @@ class PatchSimple(PatchImporter):
     def _ignore_output(self):
         root_modulename = self.modulename.split('.')[0]
 
-        return option_set('ignored outputs', root_modulename) or option_set('ignored outputs', 'all')
+        return (option_set('ignored outputs', root_modulename) or
+                option_set('ignored outputs', 'all'))

@@ -14,13 +14,14 @@
 
 {% set navigation_bar = [
     ('/', 'runs', 'Runs'),
-    ('/latest_run', 'latest_run', 'Latest run')
+    ('/latest_run', 'latest_run', 'Latest run'),
+    ('/patched_modules', 'patched_modules', 'Patched modules')
 ] -%}
 
 {% set active_page = active_page|default('runs') -%}
 
 <nav class="navbar navbar-default">
-  <div class="container">
+  <div class="container" id="top">
     <div class="navbar-header">
       <a class="navbar-brand" href="/">RecipyGui</a>
     </div>
@@ -50,7 +51,7 @@
                  placeholder="Search runs"
                  id="query"
                  name="query"
-                 value="{{ query }}" />
+                 value="{{ search_bar_query }}" />
           <span class="input-group-btn">
             <button type="submit" class="btn btn-info btn-lg">
               <i class="glyphicon glyphicon-search"></i>
@@ -58,6 +59,11 @@
           </span>
         </div>
       </form>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <p align="right">Searching database: <code>{{dbfile}}</code></p>
     </div>
   </div>
 {% endblock %}

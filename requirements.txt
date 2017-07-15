@@ -1,13 +1,16 @@
-matplotlib
 setuptools
 wrapt
 GitPython
+svn
 flask
 Flask-Script
 flask_bootstrap
 flask-wtf
 tinydb
+tinydb-serialization
 docopt
 flask-testing
 blinker
 six
+colorama
+binaryornot

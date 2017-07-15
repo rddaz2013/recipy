@@ -53,7 +53,7 @@ Alternatively, run an unmodified script with `python -m recipy SCRIPT [ARGS ...]
 
 it will produce an output called `test.npy`. To find out the details of the run which created this file you can search using
 
-    ./recipy search test.npy
+    recipy search test.npy
 
 and it will display information like the following:
 
@@ -70,13 +70,18 @@ An alternative way to view this is to use the GUI. Just run `recipy gui` and a b
 
 ![Screenshot of GUI](http://rtwilson.com/images/RecipyGUI.png)
 
+If you want to log inputs and outputs of files read or written with built-in open, you need to do a little more work. Either use `recipy.open` (only requires `import recipy` at the top of your script), or add `from recipy import open` and just use `open`.
+This workaround is required, because many libraries use built-in open internally, and you only want to record the files you explicitly opened yourself.
+
+If you use Python 2, you can pass an `encoding` parameter to `recipy.open`. In this case `codecs` is used to open the file with proper encoding.
+
 Once you've got some runs in your database, you can 'annotate' these runs with any notes that you want to keep about them. This can be particularly useful for recording which runs worked well, or particular problems you ran into. This can be done from the 'details' page in the GUI, or by running
 
 	recipy annotate
 
 which will open an editor to allow you to write notes that will be attached to the run. These will then be viewable via the command-line and the GUI when searching for runs.
 
-There are other features in the command-line interface too: `./recipy --help` to see the other options. You can view diffs, see all runs that created a file with a given name, search based on ids, show the latest entry and more:
+There are other features in the command-line interface too: `recipy --help` to see the other options. You can view diffs, see all runs that created a file with a given name, search based on ids, show the latest entry and more:
 
 	recipy - a frictionless provenance tool for Python
 
@@ -84,7 +89,7 @@ There are other features in the command-line interface too: `./recipy --help` to
 	  recipy search [options] <outputfile>
 	  recipy latest [options]
 	  recipy gui [options]
-	  recipy annotate [options]
+	  recipy annotate [<idvalue>]
 	  recipy (-h | --help)
 	  recipy --version
 
@@ -115,14 +120,19 @@ An example configuration is:
 This simply instructs recipy not to save `git diff` information when it records metadata about a run, and also to print debug messages (which can be really useful if you're trying to work out why certain functions aren't patched). At the moment, the only possible options are:
 
  * `[general]`
-	 * `debug` - print debug mesages
+	 * `debug` - print debug messages
+ 	 * `editor = vi` - Configure the default text editor that will be used when recipy needs you to type in a message. Use notepad if on Windows, for example
 	 * `quiet` - don't print any messages
 	 * `port` - specify port to use for the GUI
+ *  `[data]`
+	 * `file_diff_outputs` - store diff between the old output and new output file, if the output file exists before the script is executed
  *  `[database]`
  	 * `path = /path/to/file.json` - set the path to the database file
  * `[ignored metadata]`
 	 * `diff` - don't store the output of `git diff` in the metadata for a recipy run
 	 * `git` - don't store anything relating to git (origin, commit, repo etc) in the metadata for a recipy run
+     * `input_hashes` - don't compute and store SHA-1 hashes of input files
+     * `output_hashes` - don't compute and store SHA-1 hashes of output files
  * `[ignored inputs]`
  	 * List any module here (eg. `numpy`) to instruct recipy *not* to record inputs from this module, or `all` to ignore inputs from all modules
  * `[ignored outputs]`
@@ -159,15 +169,79 @@ class PatchNumpy(PatchSimple):
     output_wrapper = create_wrapper(log_output, 0, 'numpy')
 ```
 
-A class like this must be implemented for each module whose input/output needs logging. At the moment all of the input/output functions for the following modules are wrapped:
+A class like this must be implemented for each module whose input/output needs logging. At the moment the following input and output functions are patched:
 
- * `numpy`
- * `pandas`
- * `matplotlib`
- * `GDAL`
- * `scikit-learn`
- * `scikit-image`
- * `pillow`
- * `nibabel` (only the data formats in submodules imported by default)
+Patched modules
+===============
+
+This table lists the modules recipy has patches for, and the input and output functions that are patched.
+
+<table>
+<colgroup>
+<col width="33%" />
+<col width="33%" />
+<col width="33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">Module</th>
+<th align="left">Input functions</th>
+<th align="left">Output functions</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left"><code>pandas</code></td>
+<td align="left"><code>read_csv</code>, <code>read_table</code>, <code>read_excel</code>, <code>read_hdf</code>, <code>read_pickle</code>, <code>read_stata</code>, <code>read_msgpack</code></td>
+<td align="left"><code>DataFrame.to_csv</code>, <code>DataFrame.to_excel</code>, <code>DataFrame.to_hdf</code>, <code>DataFrame.to_msgpack</code>, <code>DataFrame.to_stata</code>, <code>DataFrame.to_pickle</code>, <code>Panel.to_excel</code>, <code>Panel.to_hdf</code>, <code>Panel.to_msgpack</code>, <code>Panel.to_pickle</code>, <code>Series.to_csv</code>, <code>Series.to_hdf</code>, <code>Series.to_msgpack</code>, <code>Series.to_pickle</code></td>
+</tr>
+<tr class="even">
+<td align="left"><code>matplotlib.pyplot</code></td>
+<td align="left"></td>
+<td align="left"><code>savefig</code></td>
+</tr>
+<tr class="odd">
+<td align="left"><code>numpy</code></td>
+<td align="left"><code>genfromtxt</code>, <code>loadtxt</code>, <code>fromfile</code></td>
+<td align="left"><code>save</code>, <code>savez</code>, <code>savez_compressed</code>, <code>savetxt</code></td>
+</tr>
+<tr class="even">
+<td align="left"><code>lxml.etree</code></td>
+<td align="left"><code>parse</code>, <code>iterparse</code></td>
+<td align="left"></td>
+</tr>
+<tr class="odd">
+<td align="left"><code>bs4</code></td>
+<td align="left"><code>BeautifulSoup</code></td>
+<td align="left"></td>
+</tr>
+<tr class="even">
+<td align="left"><code>gdal</code></td>
+<td align="left"><code>Open</code></td>
+<td align="left"><code>Driver.Create</code>, <code>Driver.CreateCopy</code></td>
+</tr>
+<tr class="odd">
+<td align="left"><code>sklearn</code></td>
+<td align="left"><code>datasets.load_svmlight_file</code></td>
+<td align="left"><code>datasets.dump_svmlight_file</code></td>
+</tr>
+<tr class="even">
+<td align="left"><code>nibabel</code></td>
+<td align="left"><code>nifti1.Nifti1Image.from_filename</code>, <code>nifti2.Nifti2Image.from_filename</code>, <code>freesurfer.mghformat.MGHImage.from_filename</code>, <code>spm99analyze.Spm99AnalyzeImage.from_filename</code>, <code>minc1.Minc1Image.from_filename</code>, <code>minc2.Minc2Image.from_filename</code>, <code>analyze.AnalyzeImage.from_filename</code>, <code>parrec.PARRECImage.from_filename</code>, <code>spm2analyze.Spm2AnalyzeImage.from_filename</code></td>
+<td align="left"><code>nifti1.Nifti1Image.to_filename</code>, <code>nifti2.Nifti2Image.to_filename</code>, <code>freesurfer.mghformat.MGHImage.to_filename</code>, <code>spm99analyze.Spm99AnalyzeImage.to_filename</code>, <code>minc1.Minc1Image.to_filename</code>, <code>minc2.Minc2Image.to_filename</code>, <code>analyze.AnalyzeImage.to_filename</code>, <code>parrec.PARRECImage.to_filename</code>, <code>spm2analyze.Spm2AnalyzeImage.to_filename</code></td>
+</tr>
+</tbody>
+</table>
 
 However, the code example above shows how easy it is to write a class to wrap a new module - so please feel free to submit a Pull Request to make recipy work with your favourite scientific modules!
+
+## Test framework
+
+recipy's test framework is in `integration_test`. The test framework has been designed to run under both Python 2.7+ and Python 3+. For more information see [recipy test framework](./docs/TestFramework.md).
+
+The test framework is run on the following platforms:
+
+* Travis CI: [![Integration test status image](https://travis-ci.org/recipy/recipy.svg)](https://travis-ci.org/recipy/recipy)
+* AppVeyor: [![Build status](https://ci.appveyor.com/api/projects/status/irvathkx02yigjfn?svg=true
+)](https://ci.appveyor.com/project/recipy/recipy)
+

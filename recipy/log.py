@@ -1,31 +1,41 @@
-import wrapt
+from __future__ import unicode_literals
 import os
 import datetime
 import sys
 import getpass
 import platform
-import sys
+import atexit
 from traceback import format_tb
-from tinydb import TinyDB
 import uuid
+import tempfile
+import shutil
+from tinydb import Query
+import difflib
+import warnings
+import codecs
+from binaryornot.check import is_binary
 
-from git import Repo, InvalidGitRepositoryError
-
-from recipyCommon.config import option_set
+from recipyCommon.version_control import add_git_info, add_svn_info, hash_file
+from recipyCommon.config import option_set, get_db_path
 from recipyCommon.utils import open_or_create_db
+from recipyCommon.libraryversions import get_version
 
 RUN_ID = {}
 
-def get_origin(repo):
-    try:
-        return repo.remotes.origin.url
-    except:
-        return None
 
 def new_run():
+    """Just an alias for the log_init function"""
     log_init()
 
+
 def log_init():
+    """Do the initial logging for a new run.
+
+    Works out what script has been run, creates a new unique run ID,
+    and gets the basic metadata.
+
+    This is called when running `import recipy`.
+    """
     # Get the path of the script we're running
     # When running python -m recipy ..., during the recipy import argument 0
     # is -c (for Python 2) or -m (for Python 3) and the script is argument 1
@@ -46,11 +56,10 @@ def log_init():
 
     # Create the unique ID for this run
     guid = str(uuid.uuid4())
-    
-    
-    
+
     # Get general metadata, environment info, etc
-    run = {"unique_id": guid,
+    run = {
+        "unique_id": guid,
         "author": getpass.getuser(),
         "description": "",
         "inputs": [],
@@ -59,26 +68,19 @@ def log_init():
         "command": sys.executable,
         "environment": [platform.platform(), "python " + sys.version.split('\n')[0]],
         "date": datetime.datetime.utcnow(),
-        "command_args": " ".join(cmd_args)}
+        "command_args": " ".join(cmd_args),
+        "warnings": [],
+        "libraries": [get_version('recipy')],
+        "custom_values": {}
+    }
 
     if not option_set('ignored metadata', 'git'):
-        try:
-            repo = Repo(scriptpath, search_parent_directories=True)
-            run["gitrepo"] = repo.working_dir
-            run["gitcommit"] =  repo.head.commit.hexsha
-            run["gitorigin"] = get_origin(repo)
+        add_git_info(run, scriptpath)
 
-            if not option_set('ignored metadata', 'diff'):
-                whole_diff = ''
-                diffs = repo.index.diff(None, create_patch=True)
-                for diff in diffs:
-                    whole_diff += "\n\n\n" + diff.diff.decode("utf-8")
+    if not option_set('ignored metadata', 'svn'):
+        add_svn_info(run, scriptpath)
 
-                run['diff'] = whole_diff
-        except (InvalidGitRepositoryError, ValueError):
-            # We can't store git info for some reason, so just skip it
-            pass
-    
+
     # Put basics into DB
     RUN_ID = db.insert(run)
 
@@ -86,45 +88,106 @@ def log_init():
     if not option_set('general', 'quiet'):
         print("recipy run inserted, with ID %s" % (guid))
 
+    # check whether patched modules were imported before recipy was imported
+    patches = db.table('patches')
+
+    for p in patches.all():
+        if p['modulename'] in sys.modules:
+            msg = 'not tracking inputs and outputs for {}; recipy was ' \
+                  'imported after this module'.format(p['modulename'])
+            warnings.warn(msg, stacklevel=3)
+
     db.close()
 
     # Register exception hook so exceptions can be logged
     sys.excepthook = log_exception
 
-def log_input(filename, source):
-    if type(filename) is not str:
-        try:
-            filename = filename.name
-        except:
-            pass
-    filename = os.path.abspath(filename)
+
+def log_values(custom_values=None, **kwargs):
+    """ Log a custom value-key pairs into the database
+    e.g,
+    >>> log_values(a=1, b=2)
+    >>> log_values({'c': 3, 'd': 4})
+    >>> log_values({'e': 5, 'f': 6}, g=7, h=8)
+    """
+
+    # create dictionary of custom values from arguments
+    custom_values = {} if custom_values is None else custom_values
+    assert isinstance(custom_values, dict), \
+        "custom_values must be a dict. type(custom_values) = %s" % type(custom_values)
+    custom_values.update(kwargs)
+
+    # debugging
     if option_set('general', 'debug'):
-        print("Input from %s using %s" % (filename, source))
-    #Update object in DB
+        print('Logging custom values: %s' % str(custom_values))
+
+    # Update object in DB
     db = open_or_create_db()
-    db.update(append("inputs", filename, no_duplicates=True), eids=[RUN_ID])
+    db.update(add_dict("custom_values", custom_values), eids=[RUN_ID])
     db.close()
 
-def log_output(filename, source):
+
+def log_input(filename, source):
+    """Log input to the database.
+
+    Called by patched functions that do some sort of input (reading from a file
+    etc) with the filename and some sort of information about the source.
+
+    Note: the source parameter is currently not stored in the database.
+    """
     if type(filename) is not str:
         try:
             filename = filename.name
         except:
             pass
     filename = os.path.abspath(filename)
+    if option_set('ignored metadata', 'input_hashes'):
+        record = filename
+    else:
+        record = (filename, hash_file(filename))
+
+    if option_set('general', 'debug'):
+        print("Input from %s using %s" % (record, source))
+    #Update object in DB
+    version = get_version(source)
+    db = open_or_create_db()
+    db.update(append("inputs", record, no_duplicates=True), eids=[RUN_ID])
+    db.update(append("libraries", version, no_duplicates=True), eids=[RUN_ID])
+    db.close()
+
+
+def log_output(filename, source):
+    """Log output to the database.
+
+    Called by patched functions that do some sort of output (writing to a file
+    etc) with the filename and some sort of information about the source.
+
+    Note: the source parameter is currently not stored in the database.
+    """
+    if type(filename) is not str:
+        try:
+            filename = filename.name
+        except:
+            pass
+    filename = os.path.abspath(filename)
+    
+    version = get_version(source)
+    db = open_or_create_db()
+
+    if option_set('data', 'file_diff_outputs') and os.path.isfile(filename) \
+       and not is_binary(filename):
+        tf = tempfile.NamedTemporaryFile(delete=False)
+        shutil.copy2(filename, tf.name)
+        add_file_diff_to_db(filename, tf.name, db)
+
     if option_set('general', 'debug'):
         print("Output to %s using %s" % (filename, source))
     #Update object in DB
-    db = open_or_create_db()
+    # data hash will be hashed at script exit, if enabled
     db.update(append("outputs", filename, no_duplicates=True), eids=[RUN_ID])
+    db.update(append("libraries", version, no_duplicates=True), eids=[RUN_ID])
     db.close()
 
-def log_update(field, filename, source):
-    filename = os.path.abspath(filename)
-    print("Adding %s to %s using $s" % (field, filename, source))
-    db = open_or_create_db()
-    db.update(append(field, filename, no_duplicates=True), eids=[RUN_ID])
-    db.close()
 
 def log_exception(typ, value, traceback):
     if option_set('general', 'debug'):
@@ -138,6 +201,44 @@ def log_exception(typ, value, traceback):
     db.close()
     # Done logging, call default exception handler
     sys.__excepthook__(typ, value, traceback)
+
+
+def log_warning(msg, typ, script, lineno, **kwargs):
+    if option_set('general', 'debug'):
+        print('Logging warning "%s"' % str(msg))
+
+    warning = {
+        'type': typ.__name__,
+        'message': str(msg),
+        'script': script,
+        'lineno': lineno
+    }
+
+    # Update object in DB
+    db = open_or_create_db()
+    db.update(append("warnings", warning, no_duplicates=True), eids=[RUN_ID])
+    db.close()
+
+    # Done logging, print warning to stderr
+    sys.stderr.write(warnings.formatwarning(msg, typ, script, lineno))
+
+
+def add_module_to_db(modulename, input_functions, output_functions,
+                     db_path=get_db_path()):
+    db = open_or_create_db(path=db_path)
+    patches = db.table('patches')
+    patches.insert({'modulename': modulename,
+                    'input_functions': input_functions,
+                    'output_functions': output_functions})
+    db.close()
+
+
+def add_file_diff_to_db(filename, tempfilename, db):
+    diffs = db.table('filediffs')
+    diffs.insert({'run_id': RUN_ID,
+                  'filename': filename,
+                  'tempfilename': tempfilename})
+
 
 def append(field, value, no_duplicates=False):
     """
@@ -153,3 +254,89 @@ def append(field, value, no_duplicates=False):
     return transform
 
 
+def add_dict(field, dict_of_values):
+    """
+    Add a given dict of values to a given array field.
+    """
+    def transform(element):
+        assert isinstance(element[field], dict), \
+            "add_dict called on a non-dict object. type(element[%s]) = %s" % (field, type(element[field]))
+        element[field].update(dict_of_values)
+
+    return transform
+
+
+# atexit functions will run on script exit (even on exception)
+@atexit.register
+def log_exit():
+    # Update the record with the timestamp of the script's completion.
+    # We don't save the duration because it's harder to serialize a timedelta.
+    if option_set('general', 'debug'):
+        print("recipy run complete")
+    exit_date = datetime.datetime.utcnow()
+    db = open_or_create_db()
+    db.update({'exit_date': exit_date}, eids=[RUN_ID])
+    db.close()
+
+
+@atexit.register
+def hash_outputs():
+    # Writing to output files is complete; we can now compute hashes.
+    if option_set('ignored metadata', 'output_hashes'):
+        return
+
+    db = open_or_create_db()
+    run = db.get(eid=RUN_ID)
+    new_outputs = [(filename, hash_file(filename))
+                   for filename in run.get('outputs')]
+    db.update({'outputs': new_outputs}, eids=[RUN_ID])
+    db.close()
+
+
+@atexit.register
+def output_file_diffs():
+    # Writing to output files is complete; we can now compute file diffs.
+    if not option_set('data', 'file_diff_outputs'):
+        return
+
+    encodings = ['utf-8', 'latin-1']
+
+    with open_or_create_db() as db:
+        diffs_table = db.table('filediffs')
+        diffs = diffs_table.search(Query().run_id == RUN_ID)
+
+    for item in diffs:
+        if option_set('general', 'debug'):
+            print('Storing file diff for "%s"' % item['filename'])
+
+        lines1 = None
+        lines2 = None
+        for enc in encodings:
+            try:
+                with codecs.open(item['tempfilename'], encoding=enc) as f:
+                    lines1 = f.readlines()
+            except UnicodeDecodeError:
+                pass
+
+            try:
+                with codecs.open(item['filename'], encoding=enc) as f:
+                    lines2 = f.readlines()
+            except UnicodeDecodeError:
+                pass
+
+        if lines1 is not None and lines2 is not None:
+            diff = difflib.unified_diff(lines1,
+                                        lines2,
+                                        fromfile='before this run',
+                                        tofile='after this run')
+            with open_or_create_db() as db:
+                diffs_table.update({'diff': ''.join([l for l in diff])},
+                                   eids=[item.eid])
+        else:
+            msg = ('Unable to read file "{}" using supported encodings ({}). '
+                   'To be able to store file diffs, use one of the supported '
+                   'encodings to write the output file.')
+            warnings.warn(msg.format(item['filename'], ', '.join(encodings)))
+
+        # delete temporary file
+        os.remove(item['tempfilename'])

@@ -12,7 +12,7 @@ setup(
     # Versions should comply with PEP440.  For a discussion on single-sourcing
     # the version across setup.py and the project code, see
     # https://packaging.python.org/en/latest/single_source_version.html
-    version='0.2.3',
+    version='0.3.0',
 
     description='A frictionless provenance framework for Python',
     long_description="""A frictionless provenance framework for Python.
@@ -68,9 +68,10 @@ Please see https://github.com/recipy/recipy for further information.
     # your project is installed. For an analysis of "install_requires" vs pip's
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
-    install_requires=['wrapt', 'tinydb>=3.0.0', 'tinydb-serialization', 'jinja2', 'docopt', 'GitPython', 'Flask',
-                      'Flask-Script', 'flask_bootstrap', 'flask-wtf', 'python-dateutil',
-                      'six'],
+    install_requires=['wrapt', 'tinydb>=3.0.0', 'tinydb-serialization',
+                      'jinja2', 'docopt', 'GitPython', 'Flask', 'colorama',
+                      'Flask-Script', 'flask_bootstrap', 'flask-wtf',
+                      'python-dateutil', 'six', "svn", "binaryornot"],
 
     entry_points={
         'console_scripts': [
